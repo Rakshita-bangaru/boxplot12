@@ -120,10 +120,37 @@ st.markdown("""
 # Title
 st.markdown('<div class="main-header">💓 Systolic Blood Pressure Box Plot Dashboard</div>', unsafe_allow_html=True)
 
-# Load data from Snowflake
+# --- Sigma Integration Javascript ---
+sigma_script = """
+<script src="https://files.sigmacomputing.com/release/sigma-plugin-api-1.0.min.js"></script>
+<script>
+  sigma.utils.init();
+  sigma.plugin.on('change', (event) => {
+    const data = event.data;
+    const params = new URLSearchParams(window.location.search);
+    params.set('sigma_data', JSON.stringify(data));
+    window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+  });
+</script>
+"""
+st.components.v1.html(sigma_script, height=0)
+
+# Load data
 @st.cache_data
-def load_data():
-    """Load data from Snowflake"""
+def load_data(sigma_raw_data=None):
+    """Load data from Sigma or fallback to Snowflake"""
+    # 1. Try Sigma Data first
+    if sigma_raw_data:
+        try:
+            import json
+            data_json = json.loads(sigma_raw_data)
+            df = pd.DataFrame(data_json.get("columns", {}))
+            if not df.empty:
+                return df, "Sigma Plugin"
+        except Exception as e:
+            st.error(f"Error parsing Sigma data: {e}")
+
+    # 2. Fallback to Snowflake
     try:
         conn = st.connection("snowflake")
         query = """
@@ -137,15 +164,21 @@ def load_data():
             ORDER BY EVENT_GROUP, EVENT
         """
         df = conn.query(query, ttl=600)
-        return df
+        return df, "Snowflake Direct"
     except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return None
+        # If no secrets and no Sigma data, show a helpful message
+        if not sigma_raw_data:
+            st.info("👋 **Waiting for data from Sigma.** Connect this plugin in your Sigma workbook to see your live data.")
+        else:
+            st.error(f"Error loading data from Snowflake: {e}")
+        return None, "None"
 
-# Load the data
-df = load_data()
+# Get data from Sigma (via query params)
+sigma_raw_data = st.query_params.get("sigma_data", None)
+df, data_source = load_data(sigma_raw_data)
 
 if df is not None and len(df) > 0:
+    st.caption(f"Data Source: **{data_source}**")
     # Convert to uppercase for consistency
     df.columns = df.columns.str.upper()
     
